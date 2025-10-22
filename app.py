@@ -29,7 +29,7 @@ def generate_auth():
     except Exception as e:
         return jsonify({"error": f"SHA256 calculation failed: {str(e)}"}), 500
     
-    auth_value = f"SHA256 Credential={APP_ID},Timestamp={timestamp},Signature={signature}"
+    auth_value = f"SHA256Credential={APP_ID},Timestamp={timestamp},Signature={signature}"
 
 
     # 由於我們只關注 Header，將其和 payloadString 一起返回
