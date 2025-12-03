@@ -4,11 +4,12 @@
 
 **本文件記錄了蝦皮 API 的實際正確使用方法，與官方文檔存在差異：**
 
-| 項目 | 官方文檔（錯誤） | 實際使用（正確） |
-|------|----------------|----------------|
-| HTTP 方法 | POST | **GET** ✅ |
-| 參數傳遞方式 | 請求體（Request Body） | **URL 查詢參數（Query Parameters）** ✅ |
-| 參數名稱 | 可能不同 | `timestamp`, `payloadString` ✅ |
+| 項目 | 官方文檔（錯誤） | 實際使用（正確） | 備註 |
+|------|----------------|----------------|------|
+| HTTP 方法 | POST | **GET** ✅ | 必須使用 GET 方法 |
+| 參數傳遞方式 | 請求體（Request Body） | **URL 查詢參數（Query Parameters）** ✅ | 使用 `request.args.get()` 讀取 |
+| 參數名稱 | 可能不同 | `timestamp`, `payloadString` ✅ | 注意大小寫 |
+| payloadString 格式 | 可能未明確 | **URL 編碼後的字串** ✅ | 必須進行 URL 編碼 |
 
 ---
 
@@ -252,10 +253,14 @@ else:
 
 ### 簽名計算公式
 
+根據 `app.py` 的實際實作：
+
+```python
+signature_factor = APP_ID + timestamp + payload_string + SECRET_KEY
+signature = hashlib.sha256(signature_factor.encode('utf-8')).hexdigest()
 ```
-signature_factor = APP_ID + timestamp + payloadString + SECRET_KEY
-signature = SHA256(signature_factor)
-```
+
+**重要：** 簽名字串的連接順序必須嚴格按照：`APP_ID + timestamp + payloadString + SECRET_KEY`
 
 ### 認證標頭格式
 
@@ -269,21 +274,46 @@ Authorization: SHA256 Credential={APP_ID},Timestamp={timestamp},Signature={signa
    ```
    signature_factor = APP_ID + timestamp + payloadString + SECRET_KEY
    ```
-   例如：
+   實際範例（根據 app.py）：
    ```
+   APP_ID = "16345040007"
+   timestamp = "1699123456"
+   payloadString = "%7B%22key%22%3A%22value%22%7D"  # URL 編碼後的 JSON
+   SECRET_KEY = "STB252ZA5HVC4MJJ5ZSYZBXY423WIYHU"
+   
    signature_factor = "16345040007" + "1699123456" + "%7B%22key%22%3A%22value%22%7D" + "STB252ZA5HVC4MJJ5ZSYZBXY423WIYHU"
    ```
 
 2. **計算 SHA256 雜湊**
    ```python
    import hashlib
+   # 必須使用 UTF-8 編碼
    signature = hashlib.sha256(signature_factor.encode('utf-8')).hexdigest()
    ```
 
 3. **組裝認證標頭**
+   ```python
+   auth_value = f"SHA256 Credential={APP_ID},Timestamp={timestamp},Signature={signature}"
    ```
-   Authorization: SHA256 Credential=16345040007,Timestamp=1699123456,Signature={signature}
+   最終格式：
    ```
+   Authorization: SHA256 Credential=16345040007,Timestamp=1699123456,Signature=abc123def456...
+   ```
+
+### 實作參考（app.py）
+
+```python
+# 從 URL 查詢參數讀取
+timestamp = request.args.get('timestamp')
+payload_string = request.args.get('payloadString')  # 已經是 URL 編碼後的字串
+
+# 計算簽名
+signature_factor = APP_ID + timestamp + payload_string + SECRET_KEY
+signature = hashlib.sha256(signature_factor.encode('utf-8')).hexdigest()
+
+# 組裝認證標頭
+auth_value = f"SHA256 Credential={APP_ID},Timestamp={timestamp},Signature={signature}"
+```
 
 ---
 
@@ -421,6 +451,8 @@ const timestamp = Math.floor(Date.now() / 1000); // 秒
 
 ### 測試請求
 
+#### 方法 1: 使用 bash 和 curl
+
 ```bash
 # 使用實際的時間戳和 payload
 TIMESTAMP=$(date +%s)
@@ -431,13 +463,90 @@ curl -X GET \
   "https://your-app.zeabur.app/generate-shopee-auth?timestamp=$TIMESTAMP&payloadString=$PAYLOAD_ENCODED"
 ```
 
+#### 方法 2: 使用 Python 測試腳本
+
+```python
+import requests
+import time
+import json
+from urllib.parse import quote
+
+# 測試配置
+SIGNER_URL = "https://your-app.zeabur.app/generate-shopee-auth"
+
+# 準備測試數據
+timestamp = str(int(time.time()))
+test_payload = {
+    "partner_id": "16345040007",
+    "shop_id": "12345"
+}
+payload_string = quote(json.dumps(test_payload))
+
+# 發送請求
+response = requests.get(SIGNER_URL, params={
+    "timestamp": timestamp,
+    "payloadString": payload_string
+})
+
+print("Status Code:", response.status_code)
+print("Response:", json.dumps(response.json(), indent=2, ensure_ascii=False))
+```
+
+#### 方法 3: 使用 JavaScript/Node.js 測試
+
+```javascript
+const axios = require('axios');
+const querystring = require('querystring');
+
+const SIGNER_URL = 'https://your-app.zeabur.app/generate-shopee-auth';
+
+const timestamp = Math.floor(Date.now() / 1000);
+const testPayload = {
+    partner_id: "16345040007",
+    shop_id: "12345"
+};
+const payloadString = querystring.escape(JSON.stringify(testPayload));
+
+axios.get(SIGNER_URL, {
+    params: {
+        timestamp: timestamp,
+        payloadString: payloadString
+    }
+})
+.then(response => {
+    console.log('Status Code:', response.status);
+    console.log('Response:', JSON.stringify(response.data, null, 2));
+})
+.catch(error => {
+    console.error('Error:', error.response?.data || error.message);
+});
+```
+
 ### 預期響應
+
+#### 成功響應 (200 OK)
 
 ```json
 {
-  "shopeeAuthHeader": "SHA256 Credential=16345040007,Timestamp=1699123456,Signature=...",
+  "shopeeAuthHeader": "SHA256 Credential=16345040007,Timestamp=1699123456,Signature=abc123def456...",
   "shopeePayload": "%7B%22partner_id%22%3A%2216345040007%22%2C%22shop_id%22%3A%2212345%22%7D",
   "timestamp": "1699123456"
+}
+```
+
+#### 錯誤響應範例
+
+**缺少參數：**
+```json
+{
+  "error": "Missing timestamp or payloadString in query parameters"
+}
+```
+
+**簽名計算失敗：**
+```json
+{
+  "error": "SHA256 calculation failed: [錯誤詳情]"
 }
 ```
 
@@ -467,13 +576,204 @@ curl -X GET \
 
 ---
 
+## 實際 Shopee API 調用範例
+
+### 完整流程：從簽名生成到 API 調用
+
+```python
+import requests
+import time
+import json
+from urllib.parse import quote
+
+# 配置
+APP_ID = '16345040007'
+SECRET_KEY = 'STB252ZA5HVC4MJJ5ZSYZBXY423WIYHU'
+SIGNER_URL = 'https://your-app.zeabur.app/generate-shopee-auth'
+SHOPEE_API_BASE = 'https://partner.shopeemobile.com/api/v2'
+
+def call_shopee_api(api_path, payload):
+    """
+    調用 Shopee API 的完整流程
+    
+    Args:
+        api_path: API 路徑，例如 '/product/get_item_list'
+        payload: 請求的 payload 字典
+    """
+    # 步驟 1: 準備參數
+    timestamp = str(int(time.time()))
+    payload_string = quote(json.dumps(payload))
+    
+    # 步驟 2: 獲取認證標頭
+    signer_response = requests.get(SIGNER_URL, params={
+        "timestamp": timestamp,
+        "payloadString": payload_string
+    })
+    
+    if signer_response.status_code != 200:
+        raise Exception(f"簽名生成失敗: {signer_response.json()}")
+    
+    auth_data = signer_response.json()
+    auth_header = auth_data["shopeeAuthHeader"]
+    
+    # 步驟 3: 調用 Shopee API
+    shopee_url = f"{SHOPEE_API_BASE}{api_path}"
+    shopee_response = requests.post(
+        shopee_url,
+        json=payload,  # 注意：這裡使用原始 payload，不是編碼後的
+        headers={
+            "Authorization": auth_header,
+            "Content-Type": "application/json"
+        }
+    )
+    
+    return shopee_response.json()
+
+# 使用範例
+try:
+    payload = {
+        "partner_id": APP_ID,
+        "shop_id": "your-shop-id",
+        "pagination_offset": 0,
+        "pagination_entries_per_page": 20
+    }
+    
+    result = call_shopee_api("/product/get_item_list", payload)
+    print("API 調用成功:", json.dumps(result, indent=2, ensure_ascii=False))
+except Exception as e:
+    print("錯誤:", str(e))
+```
+
+### JavaScript/Node.js 完整範例
+
+```javascript
+const axios = require('axios');
+const querystring = require('querystring');
+
+const APP_ID = '16345040007';
+const SIGNER_URL = 'https://your-app.zeabur.app/generate-shopee-auth';
+const SHOPEE_API_BASE = 'https://partner.shopeemobile.com/api/v2';
+
+async function callShopeeAPI(apiPath, payload) {
+    try {
+        // 步驟 1: 準備參數
+        const timestamp = Math.floor(Date.now() / 1000);
+        const payloadString = querystring.escape(JSON.stringify(payload));
+        
+        // 步驟 2: 獲取認證標頭
+        const signerResponse = await axios.get(SIGNER_URL, {
+            params: {
+                timestamp: timestamp,
+                payloadString: payloadString
+            }
+        });
+        
+        const authHeader = signerResponse.data.shopeeAuthHeader;
+        
+        // 步驟 3: 調用 Shopee API
+        const shopeeUrl = `${SHOPEE_API_BASE}${apiPath}`;
+        const shopeeResponse = await axios.post(shopeeUrl, payload, {
+            headers: {
+                'Authorization': authHeader,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        return shopeeResponse.data;
+    } catch (error) {
+        console.error('錯誤:', error.response?.data || error.message);
+        throw error;
+    }
+}
+
+// 使用範例
+(async () => {
+    try {
+        const payload = {
+            partner_id: APP_ID,
+            shop_id: 'your-shop-id',
+            pagination_offset: 0,
+            pagination_entries_per_page: 20
+        };
+        
+        const result = await callShopeeAPI('/product/get_item_list', payload);
+        console.log('API 調用成功:', JSON.stringify(result, null, 2));
+    } catch (error) {
+        console.error('調用失敗:', error);
+    }
+})();
+```
+
+---
+
+## 代碼實作細節（app.py）
+
+### 關鍵實作要點
+
+1. **路由定義**
+   ```python
+   @app.route('/generate-shopee-auth', methods=['GET'])
+   ```
+   - 必須使用 `GET` 方法
+   - 不接受 `POST` 請求
+
+2. **參數讀取**
+   ```python
+   timestamp = request.args.get('timestamp')
+   payload_string = request.args.get('payloadString')
+   ```
+   - 使用 `request.args.get()` 從查詢參數讀取
+   - 不是從 `request.json` 或 `request.form` 讀取
+
+3. **參數驗證**
+   ```python
+   if not timestamp or not payload_string:
+       return jsonify({"error": "Missing timestamp or payloadString in query parameters"}), 400
+   ```
+   - 兩個參數都是必填
+   - 缺少任一參數返回 400 錯誤
+
+4. **簽名計算**
+   ```python
+   signature_factor = APP_ID + timestamp + payload_string + SECRET_KEY
+   signature = hashlib.sha256(signature_factor.encode('utf-8')).hexdigest()
+   ```
+   - 字符串直接連接，不需要額外分隔符
+   - 必須使用 UTF-8 編碼
+   - 使用 hexdigest() 獲取十六進制字符串
+
+5. **響應格式**
+   ```python
+   return jsonify({
+       "shopeeAuthHeader": auth_value,
+       "shopeePayload": payload_string,
+       "timestamp": timestamp
+   })
+   ```
+   - 返回三個欄位
+   - `shopeeAuthHeader` 可直接用於 Authorization 標頭
+
+---
+
 ## 參考資源
 
 - Shopee Partner API 官方文檔（注意：本文檔已修正其中的錯誤）
 - SHA256 雜湊算法說明
 - URL 編碼標準（RFC 3986）
+- Flask `request.args` 文檔
 
 ---
 
-**最後更新：** 根據實際使用經驗修正  
-**版本：** 1.0（修正版）
+## 版本歷史
+
+- **v1.0（修正版）** - 根據實際使用經驗修正，明確標示與官方文檔的差異
+  - 修正 HTTP 方法：POST → GET
+  - 修正參數傳遞方式：Request Body → Query Parameters
+  - 明確 payloadString 必須 URL 編碼
+  - 添加完整的使用範例和錯誤處理說明
+
+---
+
+**最後更新：** 根據 app.py 實際實作修正  
+**版本：** 1.0（修正版）  
+**對應代碼：** app.py
